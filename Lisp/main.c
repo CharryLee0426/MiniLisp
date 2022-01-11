@@ -110,6 +110,12 @@ static Obj *Symbols;
 //编译器会将无法执行的代码自动移除实现优化
 static void error(char *fmt, ...) __attribute((noreturn));
 
+/**
+ 构造方法
+ @author Charry Lee
+ @date 2022-01-11
+ */
+
 
 
 /**
