@@ -119,9 +119,16 @@ static Obj *alloc(int type, size_t size) {
     // 添加类型标志位的 size，这个 value 不知道在哪里出现的全局变量？
     size += offsetof(Obj, value);
     
+    // 为 Obj 对象分配内存空间
     Obj *obj = malloc(size);
     obj->type = type;
     return obj;
+}
+
+static Obj *make_int(int value) {
+    Obj *r = alloc(TINT, sizeof(int));
+    r->value = value;
+    return r;
 }
 
 
