@@ -115,7 +115,14 @@ static void error(char *fmt, ...) __attribute((noreturn));
  @author Charry Lee
  @date 2022-01-11
  */
-
+static Obj *alloc(int type, size_t size) {
+    // 添加类型标志位的 size，这个 value 不知道在哪里出现的全局变量？
+    size += offsetof(Obj, value);
+    
+    Obj *obj = malloc(size);
+    obj->type = type;
+    return obj;
+}
 
 
 /**
