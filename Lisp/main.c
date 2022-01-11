@@ -33,9 +33,9 @@
 // 这是从用户视角可见的常规类型
 enum {
     TINT = 1,
-    TCELL,
-    TSYMBOL,
-    TPRIMITIVE,
+    TCELL,      // 2
+    TSYMBOL,    // 3
+    TPRIMITIVE, // ...
     TFUNCTION,
     TMACRO,
     TSPECIAL,
@@ -115,6 +115,8 @@ static void error(char *fmt, ...) __attribute((noreturn));
  @author Charry Lee
  @date 2022-01-11
  */
+
+// 分配函数，为 Obj 对象根据对象类型分配内存空间
 static Obj *alloc(int type, size_t size) {
     // 添加类型标志位的 size，这个 value 不知道在哪里出现的全局变量？
     size += offsetof(Obj, value);
@@ -125,11 +127,62 @@ static Obj *alloc(int type, size_t size) {
     return obj;
 }
 
+// 各种对象的生成函数
 static Obj *make_int(int value) {
     Obj *r = alloc(TINT, sizeof(int));
     r->value = value;
     return r;
 }
+
+static Obj *make_symbol(char *name) {
+    Obj *sym = alloc(TSYMBOL, strlen(name) + 1);
+    strcpy(sym->name, name);
+    return sym;
+}
+
+// 现在还不知道这个 Primitive 有什么用
+static Obj *make_primitive(Primitive *fn) {
+    Obj *r = alloc(TPRIMITIVE, sizeof(Primitive *));
+    r->fn = fn;
+    return r;
+}
+
+static Obj *make_function(int type, Obj *params, Obj *body, Obj *env) {
+    assert(type == TFUNCTION || type == TMACRO);
+    Obj *r = alloc(type, sizeof(Obj *) * 3);
+    r->params = params;
+    r->body = body;
+    r->env = env;
+    return r;
+}
+
+static Obj *make_special(int subtype) {
+    Obj *r = malloc(sizeof(void*) * 2);
+    r->type = TSPECIAL;
+    r->subtype = subtype;
+    return r;
+}
+
+static Obj *make_env(Obj *vars, Obj *up) {
+    Obj *r = alloc(TENV, sizeof(Obj *) * 2);
+    r->vars = vars;
+    r->up = up;
+    return r;
+}
+
+static Obj *cons(Obj *car, Obj *cdr) {
+    Obj *cell = alloc(TCELL, sizeof(Obj *) * 2);
+    cell->car = car;
+    cell->cdr = cdr;
+    return cell;
+}
+
+// acon 是复合类型，返回的是 ((x . y) . a)
+static Obj *acon(Obj *x, Obj *y, Obj *a) {
+    return cons(cons(x, y), a);
+}
+
+
 
 
 /**
@@ -141,7 +194,6 @@ static Obj *make_int(int value) {
  @date 2022-01-10
  */
 int main(int argc, char **argv) {
-    int a[2] = {0, 1};
-    printf("%p %p", &a[1], &a[0]);
+    // 在这里最后插入解释器业务逻辑
     return 0;
 }
