@@ -98,9 +98,10 @@ typedef struct Obj {
 } Obj;
 
 // Lisp 语言中的几个常量
-static Obj *Nil;
-static Obj *Dot;
-static Obj *Cparen;
+static Obj *Nil;            // 相当于 NULL
+static Obj *Dot;            // 相当于 "."
+static Obj *Cparen;         // 相当于括号
+static Obj *True;
 
 // 这个列表包括了所有标志，传统上这种数据结构叫做 "obarray",
 //但这实际上是个列表而不是数组。
@@ -112,6 +113,7 @@ static void error(char *fmt, ...) __attribute((noreturn));
 
 /**
  构造方法
+ 120 - 184 行
  @author Charry Lee
  @date 2022-01-11
  */
@@ -182,6 +184,236 @@ static Obj *acon(Obj *x, Obj *y, Obj *a) {
     return cons(cons(x, y), a);
 }
 
+/**
+ 语法分析器
+ 这部分是一个简易的向下递归的语法分析程序。
+ 在阅读这部分之前，有必要简单的了解一下 LISP 的语法。
+ @author Charry Lee
+ @date 2022-01-12
+ */
+
+// 读取
+static Obj *read(void);
+
+// 将错误信息输出到 stderr 流
+static void error(char *fmt, ...) {
+    va_list ap;                     // 定义一个可变参数表指针 ap（args_pointer）
+    va_start(ap, fmt);              // 从 fmt 的第一个参数开始，初始化 ap
+    vfprintf(stderr, fmt, ap);      // 将 ap 按照 fmt 的格式输入到 stderr 流
+    fprintf(stderr, "\n");          // 添加一个换行符
+    va_end(ap);                     // 使用完 ap 指针以后必须用 va_end 结束 ap 指针
+    exit(1);                        // 发生错误，异常退出（返回 1）
+}
+
+static int peek(void) {
+    int c = getchar();
+    ungetc(c, stdin);       // 将字符 c 退回到 stdin 中
+    return c;
+}
+
+/**
+ 直到输入新行前一直跳过解释。
+ 根据操作系统的实现不同，换行可能为 '\r', "\r\n" or "\n"
+ */
+static void skip_line(void) {
+    for (;;) {
+        int c = getchar();
+        if (EOF == c || '\n' == c) {
+            return;
+        }
+        if ('r' == c) {
+            if ('\n' == peek()) {
+                getchar();
+            }
+            return;
+        }
+    }
+}
+
+// 读取列表，要注意此时列表的 '(' 已经被读取到
+static Obj *read_list(void) {
+    // 读取第二个 Obj，并对其中几种错误进行规避。
+    Obj *obj = read();
+    if (!obj) {                             // 未封闭的括号
+        error("Unclosed parenthesis");
+    }
+    if (obj == Dot) {                       // 只有一个点
+        error("Stray Dot");
+    }
+    if (obj == Cparen) {                    // () == Nil
+        return Nil;
+    }
+    
+    // 上面的几种判断错误或判空流程过去后，开始正式的读取列表
+    Obj *head, *tail;
+    head = tail = cons(obj, Nil);     // 初始化为 (head, tail)
+    for (;;) {
+        Obj *obj = read();
+        if (!obj) {
+            error("Unclosed parenthesis");
+        }
+        if (Cparen == obj) {
+            return head;
+        }
+        if (Dot == obj) {
+            tail->cdr = read();
+            if (read() != Cparen) {
+                error("Closed parenthesis excepted after dot");
+            }
+            return head;
+        }
+        tail->cdr = cons(obj, Nil);
+        tail = tail->cdr;
+    }
+    return Nil;     // 理论上来说应该这一部分永远也不会执行，但是不这么写 Xcode 会报错
+}
+
+// 如果存在同名的标志，则返回已经存在的那个，否则创建一个新的标志。
+static Obj *intern(char *name) {
+    for (Obj *p = Symbols; p != Nil; p = p->cdr) {
+        if (0 == strcmp(name, p->car->name)) {
+            return p->car;
+        }
+    }
+    Obj *sym = make_symbol(name);
+    Symbols = cons(sym, Symbols);
+    return sym;
+}
+
+// 读取巨集 '(...)。读取一个表达式然后返回 (quote <expr>)
+static Obj *read_quote(void) {
+    Obj *sym = intern("quote");
+    return cons(sym, cons(read(), Nil));
+}
+
+static int read_number(int val) {
+    while (isdigit(peek())) {
+        val = val * 10 + (getchar() - '0');
+    }
+    return val;
+}
+
+#define SYMBOL_MAX_LEN 200      // 定义标志最大长度为 200
+
+static Obj *read_symbol(char c) {
+    char buf[SYMBOL_MAX_LEN + 1];
+    int len = 1;
+    buf[0] = c;
+    while (isalnum(peek()) || '-' == peek()) {
+        if (SYMBOL_MAX_LEN <= len) {
+            error("Symbol name too long");
+        }
+        buf[len++] = getchar();
+    }
+    buf[len] = '\0';
+    return intern(buf);
+}
+
+// read 函数的具体实现就，这个应该是一个很重要的函数。
+static Obj *read(void) {
+    for (; ; ) {
+        int c = getchar();
+        if (' ' == c || '\n' == c || '\r' == c || '\t' == c) {
+            continue;
+        }
+        if (EOF == c) {
+            return NULL;
+        }
+        if (';' == c) {
+            skip_line();
+            continue;
+        }
+        if ('(' == c) {
+            return read_list();
+        }
+        if (')' == c) {
+            return Cparen;
+        }
+        if ('.' == c) {
+            return Dot;
+        }
+        if (isdigit(c)) {
+            return make_int(read_number(c - '0'));
+        }
+        if ('-' == c) {
+            return make_int(-read_number(c - '0'));
+        }
+        if (isalpha(c) || strchr("+=!@#$%^&*", c)) {
+            return read_symbol(c);
+        }
+        error("Don't know how to handle %c", c);
+    }
+}
+
+// 将给定的 Obj 打印到控制台
+static void print(Obj *obj) {
+    switch (obj->type) {
+        case TINT:
+            printf("%d", obj->value);
+            break;
+        case TCELL:
+            printf("(");
+            for (; ; ) {
+                print(obj->car);
+                if (Nil == obj->cdr) {
+                    break;
+                }
+                if (TCELL != obj->cdr->type) {
+                    printf(" . ");
+                    print(obj->cdr);
+                    break;
+                }
+                obj = obj->cdr;
+            }
+            printf(")");
+            break;
+        case TSYMBOL:
+            printf("%s", obj->name);
+            break;
+        case TPRIMITIVE:
+            printf("<primitive>");
+            break;
+        case TFUNCTION:
+            printf("<function>");
+            break;
+        case TMACRO:
+            printf("<marcro>");
+            break;
+        case TSPECIAL:
+            if (Nil == obj) {
+                printf("()");
+            } else if (True == obj) {
+                printf("t");
+            } else {
+                error("Bug: print: Unknown subtype: %d", obj->subtype);
+                return;
+            }
+            
+        default:
+            error("Bug: print: Unknown tag type: %d", obj->type);
+    }
+}
+
+//取得列表的长度
+static int list_length(Obj *list) {
+    int len = 0;
+    for (; ; ) {
+        if (Nil == list) {
+            return len;
+        }
+        if (TCELL != list->type) {
+            error("length: cannot handle dotted list");
+        }
+        list = list->cdr;
+        len++;
+    }
+}
+
+
+
+
+
+
 
 
 
@@ -194,6 +426,7 @@ static Obj *acon(Obj *x, Obj *y, Obj *a) {
  @date 2022-01-10
  */
 int main(int argc, char **argv) {
-    // 在这里最后插入解释器业务逻辑
+    // 在这里最后插入解释器业务逻辑，现在用于测试
+    printf("offsetof is %lu\n", offsetof(Obj, value));
     return 0;
 }
