@@ -120,8 +120,13 @@ static void error(char *fmt, ...) __attribute((noreturn));
 
 // 分配函数，为 Obj 对象根据对象类型分配内存空间
 static Obj *alloc(int type, size_t size) {
-    // 添加类型标志位的 size，这个 value 不知道在哪里出现的全局变量？
-    size += offsetof(Obj, value);
+    // 添加类型标志位的 size，这个 value 其实是一个 class 指示器
+    // 这里的作用就是将 type 的内存空间加出来了，因为 Obj 中 type
+    // 之后就是一个 union 变量，实际上对于不同类型的 Obj，只有一种
+    // 变量会被赋值。这里的 union 默认会按最长的成员变量的内存长度为
+    // 每个成员分配内存，从而达到对齐的目的。这里的 value 换成 name
+    // 也是可以的。
+    size += offsetof(Obj, value);       // 在 64 bits 机器上是 8.
     
     // 为 Obj 对象分配内存空间
     Obj *obj = malloc(size);
@@ -406,6 +411,148 @@ static int list_length(Obj *list) {
         }
         list = list->cdr;
         len++;
+    }
+}
+
+/**
+ Evaluator 计算式
+ 这部分负责实现 Obj 之间的各种运算
+ 
+ @author Charry Lee
+ @date 2022-01-13
+ */
+
+static Obj *eval(Obj *env, Obj *obj);
+
+static void add_variable(Obj *env, Obj *sym, Obj *val) {
+    env->vars = acon(sym, val, env->vars);
+}
+
+// 返回一个新创建的环境框架
+static Obj *push_env(Obj *env, Obj *vars, Obj *values) {
+    if (list_length(vars) != list_length(values)) {
+        error("Cannot apply function: number of argument doesn't match");
+    }
+    Obj *map = Nil;
+    for (Obj *p = vars, *q = values; p != Nil; p = p->cdr, q = q->cdr) {
+        Obj *sym = p->car;
+        Obj *val = q->car;
+        map = acon(sym, val, map);
+    }
+    return make_env(map, env);
+}
+
+// 从头部开始计算列表元素并且返回最后一个值
+static Obj *progn(Obj *env, Obj *list) {
+    Obj *r = NULL;
+    for (Obj *lp = list; lp != Nil; lp = lp->cdr) {
+        r = eval(env, lp->car);
+    }
+    return r;
+}
+
+// 计算所有列表元素并且返回他们的值作为一个新的列表
+static Obj *eval_list(Obj *env, Obj *list) {
+    Obj *head = NULL;
+    Obj *tail = NULL;
+    for (Obj *lp = list; lp != Nil; lp = lp->cdr) {
+        Obj *tmp = eval(env, lp->car);
+        if (head == NULL) {
+            head = tail = cons(tmp, Nil);
+        } else {
+            tail->cdr = cons(tmp, Nil);
+            tail = tail->cdr;
+        }
+    }
+    if (head == NULL) {
+        return Nil;
+    }
+    return head;
+}
+
+// 判断是否为列表
+static bool is_list(Obj *obj) {
+    return obj == Nil || obj->type == TCELL;
+}
+
+// 将参数应用到 fn 上
+static Obj *apply(Obj *env, Obj *fn, Obj *args) {
+    if (!is_list(args)) {
+        error("argument must be a list");
+    }
+    if (fn->type == TPRIMITIVE) {
+        return fn->fn(env, args);
+    }
+    if (fn->type == TFUNCTION) {
+        Obj *body = fn->body;
+        Obj *params = fn->params;
+        Obj *eargs = eval_list(env, args);
+        Obj *newenv = push_env(fn->env, params, eargs);
+        return progn(newenv, body);
+    }
+    error("not supported");
+}
+
+// 通过符号找到变量，如果未找到就返回 NULL
+static Obj *find(Obj *env, Obj *sym) {
+    for (Obj *p = env; p; p = p->up) {
+        for (Obj *cell = p->vars; cell != Nil; cell = cell->cdr) {
+            Obj *bind = cell->car;
+            if (sym == bind->car) {
+                return bind;
+            }
+        }
+    }
+    return NULL;
+}
+
+// 拓展给定的巨集应用格式
+static Obj *macroexpand(Obj *env, Obj *obj) {
+    if (obj->type != TCELL || obj->car->type != TSYMBOL) {
+        return obj;
+    }
+    Obj *bind = find(env, obj->car);
+    if (!bind || bind->cdr->type != TMACRO) {
+        return obj;
+    }
+    Obj *args = obj->cdr;
+    Obj *body = bind->cdr->body;
+    Obj *params = bind->cdr->params;
+    Obj *newenv = push_env(env, params, args);
+    return progn(newenv, body);
+}
+
+// 求取 S 表达式的值
+static Obj *eval(Obj *env, Obj *obj) {
+    switch (obj->type) {
+        case TINT:
+        case TPRIMITIVE:
+        case TFUNCTION:
+        case TSPECIAL:
+            return obj;
+        case TSYMBOL: {
+            Obj *bind = find(env, obj);
+            if (!bind) {
+                error("Undefined symbol: %s", obj->name);
+            }
+            return bind->cdr;
+        }
+        case TCELL: {
+            // 函数应用格式
+            Obj *expanded = macroexpand(env, obj);
+            if (expanded != obj) {
+                return eval(env, expanded);
+            }
+            Obj *fn = eval(env, obj->car);
+            Obj *args = obj->cdr;
+            if (fn->type != TPRIMITIVE && fn->type != TFUNCTION) {
+                error("The head of a list must be a function");
+            }
+            return apply(env, fn, args);
+        }
+        default:
+            error("Bug: eval: Unknown tag type %d", obj->type);
+            break;
     }
 }
 
