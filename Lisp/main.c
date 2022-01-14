@@ -556,6 +556,176 @@ static Obj *eval(Obj *env, Obj *obj) {
     }
 }
 
+/**
+ 函数和一些其他特殊的格式。
+ 
+ @author Charry Lee
+ @date 2022-01-14
+ */
+
+// ‘expr
+static Obj *prim_quote(Obj *env, Obj *list) {
+    if (list_length(list) != 1) {
+        error("Malformed quote");
+    }
+    return list->car;
+}
+
+// (list expr ...)
+static Obj *prim_list(Obj *env, Obj *list) {
+    return eval_list(env, list);
+}
+
+// (setq <symbol> expr)
+static Obj *prim_setq(Obj *env, Obj *list) {
+    if (list_length(list) != 2 || list->car->type != TSYMBOL) {
+        error("Malformed setq");
+    }
+    Obj *bind = find(env, list->car);
+    if (!bind) {
+        error("Unbound variable %s", list->car->name);
+    }
+    Obj *value = eval(env, list->cdr->car);
+    bind->cdr = value;
+    return value;
+}
+
+// (+ <integer> ...)
+static Obj *prim_plus(Obj *env, Obj *list) {
+    int sum = 0;
+    for (Obj *args = eval_list(env, list); args != Nil; args = args->cdr) {
+        if (args->car->type != TINT) {
+            error("+ takes only num");
+        }
+        sum += args->car->value;
+    }
+    return make_int(sum);
+}
+
+static Obj *handle_function(Obj *env, Obj *list, int type) {
+    if (list->type != TCELL || !is_list(list->car) || list->cdr->type != TCELL) {
+        error("Malformed lambda");
+    }
+    for (Obj *p = list->car; p != Nil; p = p->cdr) {
+        if (p->cdr->type != TSYMBOL) {
+            error("Param must be a symbol");
+        }
+        if (!is_list(p->cdr)) {
+            error("Param is not a flat list");
+        }
+    }
+    Obj *car = list->car;
+    Obj *cdr = list->cdr;
+    return make_function(type, car, cdr, env);
+}
+
+// (lambda (<symbol> ...) expr ...)
+static Obj *prim_lambda(Obj *env, Obj *list) {
+    return handle_function(env, list, TFUNCTION);
+}
+
+static Obj *handle_defun(Obj *env, Obj *list, int type) {
+    if (list->car->type != TSYMBOL || list->cdr->type != TCELL)
+        error("Malformed defun");
+    Obj *sym = list->car;
+    Obj *rest = list->cdr;
+    Obj *fn = handle_function(env, rest, type);
+    add_variable(env, sym, fn);
+    return fn;
+}
+
+// (defun <symbol> (<symbol> ...) expr ...)
+static Obj *prim_defun(Obj *env, Obj *list) {
+    return handle_defun(env, list, TFUNCTION);
+}
+
+// (define <symbol> expr)
+static Obj *prim_define(Obj *env, Obj *list) {
+    if (list_length(list) != 2 || list->car->type != TSYMBOL)
+        error("Malformed define");
+    Obj *sym = list->car;
+    Obj *value = eval(env, list->cdr->car);
+    add_variable(env, sym, value);
+    return value;
+}
+
+// (defmacro <symbol> (<symbol> ...) expr ...)
+static Obj *prim_defmacro(Obj *env, Obj *list) {
+    return handle_defun(env, list, TMACRO);
+}
+
+// (macroexpand expr)
+static Obj *prim_macroexpand(Obj *env, Obj *list) {
+    if (list_length(list) != 1)
+        error("Malformed macroexpand");
+    Obj *body = list->car;
+    return macroexpand(env, body);
+}
+
+// (println expr)
+static Obj *prim_println(Obj *env, Obj *list) {
+    print(eval(env, list->car));
+    printf("\n");
+    return Nil;
+}
+
+// (if expr expr expr ...)
+static Obj *prim_if(Obj *env, Obj *list) {
+    if (list_length(list) < 2)
+        error("Malformed if");
+    Obj *cond = eval(env, list->car);
+    if (cond != Nil) {
+        Obj *then = list->cdr->car;
+        return eval(env, then);
+    }
+    Obj *els = list->cdr->cdr;
+    return els == Nil ? Nil : progn(env, els);
+}
+
+// (= <integer> <integer>)
+static Obj *prim_num_eq(Obj *env, Obj *list) {
+    if (list_length(list) != 2)
+        error("Malformed =");
+    Obj *values = eval_list(env, list);
+    Obj *x = values->car;
+    Obj *y = values->cdr->car;
+    if (x->type != TINT || y->type != TINT)
+        error("= only takes numbers");
+    return x->value == y->value ? True : Nil;
+}
+
+// (exit)
+static Obj *prim_exit(Obj *env, Obj *list) {
+    exit(0);
+}
+
+static void add_primitive(Obj *env, char *name, Primitive *fn) {
+    Obj *sym = intern(name);
+    Obj *prim = make_primitive(fn);
+    add_variable(env, sym, prim);
+}
+
+static void define_constants(Obj *env) {
+    Obj *sym = intern("t");
+    add_variable(env, sym, True);
+}
+
+static void define_primitives(Obj *env) {
+    add_primitive(env, "quote", prim_quote);
+    add_primitive(env, "list", prim_list);
+    add_primitive(env, "setq", prim_setq);
+    add_primitive(env, "+", prim_plus);
+    add_primitive(env, "define", prim_define);
+    add_primitive(env, "defun", prim_defun);
+    add_primitive(env, "defmacro", prim_defmacro);
+    add_primitive(env, "macroexpand", prim_macroexpand);
+    add_primitive(env, "lambda", prim_lambda);
+    add_primitive(env, "if", prim_if);
+    add_primitive(env, "=", prim_num_eq);
+    add_primitive(env, "println", prim_println);
+    add_primitive(env, "exit", prim_exit);
+}
+
 
 
 
@@ -574,6 +744,31 @@ static Obj *eval(Obj *env, Obj *obj) {
  */
 int main(int argc, char **argv) {
     // 在这里最后插入解释器业务逻辑，现在用于测试
-    printf("offsetof is %lu\n", offsetof(Obj, value));
+    Nil = make_special(NULL);
+    Dot = make_special(TDOT);
+    Cparen = make_special(TCPAREN);
+    True = make_special(TTRUE);
+    Symbols = Nil;
+    
+    Obj *env = make_env(Nil, NULL);
+    
+    define_constants(env);
+    define_primitives(env);
+    
+    // 主循环
+    for (; ; ) {
+        Obj *expr = read();
+        if (!expr) {
+            return 0;
+        }
+        if (expr == Cparen) {
+            error("Stray close parenthesis");
+        }
+        if (expr == Dot) {
+            error("Stray Dot");
+        }
+        print(eval(env, expr));
+        printf("\n");
+    }
     return 0;
 }
